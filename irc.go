@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/victorluisca/twitch-irc-client/utils"
 )
 
 type IRCClient struct {
+	addr         string
 	password     string
 	nickname     string
 	capabilities string
@@ -42,12 +45,13 @@ func (b *IRCClientBuilder) WithCapabilities(capabilities string) *IRCClientBuild
 
 func (b *IRCClientBuilder) Connect(addr string) (*IRCClient, error) {
 	client := &IRCClient{
+		addr:         addr,
 		password:     b.password,
 		nickname:     b.nickname,
 		capabilities: b.capabilities,
 	}
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", client.addr)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to Twitch IRC: %w", err)
 	}
@@ -88,14 +92,55 @@ func (c *IRCClient) ListenForMessages() error {
 		if err != nil {
 			return fmt.Errorf("error reading from server: %w", err)
 		}
-		fmt.Print(line)
 
 		if strings.HasPrefix(line, "PING") {
 			if _, err := fmt.Fprintf(c.conn, "PONG :%s\r\n", strings.TrimPrefix(line, "PING :")); err != nil {
 				return fmt.Errorf("error sending PONG command: %w", err)
 			}
 		}
+		if strings.Contains(line, "PRIVMSG") {
+			nickname, color, message, err := parseMessage(line)
+			if err != nil {
+				fmt.Printf("Error parsing message : %s\n", err)
+				continue
+			}
+			utils.PrintMessage(color, nickname, message)
+		} else {
+			fmt.Print(line)
+		}
 	}
+}
+
+func parseMessage(line string) (string, string, string, error) {
+	parts := strings.SplitN(line, " :", 3)
+	if len(parts) < 3 {
+		return "", "", "", fmt.Errorf("invalid message format")
+	}
+	metadata := parts[0]
+	message := parts[2]
+
+	var nickname, color string
+	metaParts := strings.Split(metadata, ";")
+	for _, part := range metaParts {
+		if strings.HasPrefix(part, "display-name=") {
+			nickname = strings.TrimPrefix(part, "display-name=")
+		}
+		if strings.HasPrefix(part, "color=") {
+			color = strings.TrimPrefix(part, "color=")
+		}
+	}
+
+	if nickname == "" {
+		return "", "", "", fmt.Errorf("nickname not found")
+	}
+
+	if color == "" {
+		color = "#FFFFFF"
+	}
+
+	color = utils.HexToANSI(color)
+
+	return nickname, color, message, nil
 }
 
 func (c *IRCClient) SendMessage(message string) error {
